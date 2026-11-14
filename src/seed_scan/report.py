@@ -51,8 +51,8 @@ every other character is literal.
   of a BIP39 reading. Then, two spaces in, per coin and purpose of its
   accounts, in the bundle's order, ``<coin>, purpose <n>`` or, for
   Electrum's layout, ``<coin>, Electrum account``, or, for an EVM coin's
-  legacy layout, ``<coin>, legacy account``, with ``, on <chain>`` after
-  a coin the node's chain reads, followed by:
+  legacy layouts and its addresses alone, ``<coin>, legacy account``,
+  with ``, on <chain>`` after a coin the node's chain reads, followed by:
 
   - ``: not checked: <reason>``, where the scan result does not read
     it, or no result is given;
@@ -95,7 +95,13 @@ every other character is literal.
   readings can hold the same account keys, as the same passphrase typed
   twice gives: each is listed with its accounts, and a total counts once
   the accounts paid by the same outputs, those of one key read as one
-  script type.
+  script type. Two accounts of different keys can still list one
+  address, so the Bitcoin and EVM totals sum the balance of each address
+  once, and so do the token totals its token balances, as the first used
+  account listing it has them. A forks total holds what each account had
+  at the fork, so it counts once the accounts of one public key and chain
+  code, whatever else their xpubs spell: those list the same scripts, and
+  any others none of them.
 - ``digest: sha256 <hex>``: the SHA-256 of every line above it, so that
   ``sed '$d' report.txt | shasum -a 256`` gives it back.
 """
@@ -106,6 +112,8 @@ import re
 from hashlib import sha256
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeVar
+
+from bip32_descriptors.bip32 import BIP32KeyData
 
 from seed_scan.bundle import Account, Bundle, Reading, Search
 from seed_scan.bundle import loads as bundle_loads
@@ -124,6 +132,7 @@ from seed_scan.forks import (
 from seed_scan.forks import loads as forks_loads
 from seed_scan.scan import (
     EvmAccount,
+    EvmAddress,
     EvmSearched,
     EvmTokenBalance,
     ScanResult,
@@ -459,23 +468,31 @@ def _scripts(account: Account) -> tuple[str, ...]:
     whatever path the origin names. An EVM account has no descriptors,
     and its addresses are those of its xpub's receive branch, whatever its
     coin, or of its xpub itself for a legacy layout, of purpose None, so
-    the layout is part of what gives them.
+    the layout is part of what gives them; for an address alone, the one
+    index it names.
     """
     if account.descriptors:
         return (
             account.xpub,
             *(_ORIGIN.sub("", text.partition("#")[0]) for text in account.descriptors),
         )
+    if account.index is not None:
+        return (account.xpub, f"index {account.index}")
     return (account.xpub, "legacy" if account.purpose is None else "receive")
 
 
 def _p2pkh(account: Account) -> tuple[str, ...]:
-    """Return what gives the scripts of an account `forks` reads: its xpub.
+    """Return what gives the scripts of an account `forks` reads.
 
     Each account a forks result lists is read as P2PKH over its xpub's
-    receive and change branches, whatever its coin.
+    receive and change branches, whatever its coin: those scripts are
+    given by the xpub's public key and chain code alone, not by the
+    depth, parent and index it also spells. Two accounts of one key and
+    chain code list the same scripts, held at the fork as since; two of
+    others list none in common.
     """
-    return (account.xpub,)
+    key = BIP32KeyData.b58decode(account.xpub)
+    return (key.key.hex(), key.chain_code.hex())
 
 
 def _once(
@@ -486,7 +503,7 @@ def _once(
     """Return the used accounts, the first of each `key`.
 
     `used` pairs each account with its coin. Two accounts of one `key`
-    hold the same funds, which a total counts once.
+    are one account, which a total counts once.
     """
     accounts = {
         (account.coin, n, account.purpose, account.account): account
@@ -501,13 +518,21 @@ def _once(
 
 
 def _totals(bundle: Bundle, result: ScanResult) -> list[str]:
-    """Return the total of each coin the result reads, each key once."""
+    """Return the total of each coin the result reads.
+
+    The accounts are counted each key once, and the funds each address
+    once.
+    """
     lines = []
     if result.server is not None:
         used = _once(bundle, [("bitcoin", u) for u in result.used])
+        held: dict[str, tuple[int, int]] = {}
+        for account in result.used:
+            for a in account.addresses:
+                held.setdefault(a.address, (a.confirmed, a.unconfirmed))
         lines.append(
-            f"total: bitcoin, {sum(u.confirmed for u in used)} sat confirmed,"
-            f" {sum(u.unconfirmed for u in used)} sat unconfirmed,"
+            f"total: bitcoin, {sum(c for c, _ in held.values())} sat confirmed,"
+            f" {sum(u for _, u in held.values())} sat unconfirmed,"
             f" {len(used)} used accounts, each account key once"
         )
     if result.evm is not None:
@@ -516,25 +541,31 @@ def _totals(bundle: Bundle, result: ScanResult) -> list[str]:
 
 
 def _evm_totals(bundle: Bundle, chain: str, used: tuple[EvmAccount, ...]) -> list[str]:
-    """Return the totals of the EVM chain the node serves, each key once.
+    """Return the totals of the EVM chain the node serves.
 
-    Whatever its coin: an Ethereum and an Ethereum Classic account of one
-    key are read at the same addresses, on the same chain. The native
-    asset's total comes first, then each token's that is not zero.
+    The accounts are counted each key once, and the funds each address
+    once, its wei and its tokens alike, whatever its coin: an Ethereum
+    and an Ethereum Classic account of one key are read at the same
+    addresses, on the same chain. The native asset's total comes first,
+    then each token's that is not zero.
     """
     accounts = _once(bundle, [(u.coin, u) for u in used])
+    held: dict[str, EvmAddress] = {}
+    for account in used:
+        for a in account.addresses:
+            held.setdefault(a.address, a)
     native = (
-        f"total: {chain}, {sum(int(u.balance) for u in accounts)} wei of"
+        f"total: {chain}, {sum(int(a.balance) for a in held.values())} wei of"
         f" {EVM_CHAINS[chain].symbol}, {len(accounts)} used accounts, each account"
         " key once"
     )
     lines = [native]
     for token in EVM_CHAINS[chain].tokens:
         if units := sum(
-            int(held.balance)
-            for account in accounts
-            for held in account.tokens
-            if held.contract == token.contract
+            int(balance.balance)
+            for a in held.values()
+            for balance in a.tokens
+            if balance.contract == token.contract
         ):
             total = EvmTokenBalance(
                 token.contract, token.symbol, token.decimals, str(units)
@@ -544,7 +575,10 @@ def _evm_totals(bundle: Bundle, chain: str, used: tuple[EvmAccount, ...]) -> lis
 
 
 def _forks_total(bundle: Bundle, result: ForksResult) -> str:
-    """Return the total of a forks result, each key once, whatever its coin."""
+    """Return the total of a forks result, each key once, whatever its coin.
+
+    A key is its public key and chain code, as `_p2pkh` says.
+    """
     used = _once(bundle, [(u.coin, u) for u in result.used], _p2pkh)
     return (
         f"total: {result.chain}, {sum(u.confirmed for u in used)} sat confirmed,"

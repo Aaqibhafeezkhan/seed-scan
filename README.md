@@ -96,13 +96,15 @@ tokens checked.
 `--evm-chain` names the chain the node serves, Ethereum where it is not
 given; `seed-scan scan --help` lists the chains. A key gives the same
 address on each, so Ethereum's accounts are read on every chain: those
-at `m/44h/60h/<n>h`, and the legacy addresses Ledger Live and
-MyEtherWallet derive at `m/44h/60h/0h/<n>`. On Ethereum Classic its own
-are read too: those at `m/44h/61h/<n>h`, where its wallets derive, and
-the legacy ones at `m/44h/60h/160720h/0h/<n>`. On BNB Smart Chain, BNB's
-are read too: those at `m/44h/714h/<n>h`, where Trust Wallet's "Smart
-Chain Legacy" derives. Before any address is asked, the node's chain id
-is compared with the chain's. SECURITY.md's *Limitations, not
+at `m/44h/60h/<n>h`, the legacy addresses Ledger Live and MyEtherWallet
+derive at `m/44h/60h/0h/<n>`, and those MyEtherWallet derives from a
+mnemonic at `m/44h/60h/<n>`. On Ethereum Classic its own are read too:
+those at `m/44h/61h/<n>h`, where its wallets derive, and the legacy ones
+at `m/44h/60h/160720h/0h/<n>`. On BNB Smart Chain, BNB's are read too:
+those at `m/44h/714h/<n>h`, where Trust Wallet's "Smart Chain Legacy"
+derives, and the one address of its "Stable Account", at
+`m/44h/60h/9172h/3604/9999`. Before any address is asked, the node's
+chain id is compared with the chain's. SECURITY.md's *Limitations, not
 vulnerabilities* says which nodes that refuses, and what it does not
 prove.
 
@@ -183,7 +185,13 @@ one machine and everything after it reads public data:
 
 The bundle holds no secret, but it is not harmless: an account public
 key gives every address of that account, so whoever holds the bundle can
-follow its history and balance, though not spend from it. The same holds
+follow its history and balance, though not spend from it. Nor is it
+harmless beside one leaked key: by BIP32, an extended public key and the
+private key of one of its unhardened children give the extended private
+key, so the bundle and the key of a single address give its account's
+keys. For MyEtherWallet's layout the bundle holds the key at
+`m/44h/60h`, so the key of one `m/44h/60h/<n>` address gives every
+Ethereum account's keys, and those under `m/44h/60h` too. The same holds
 of the report: it holds no secret, but it lets anyone follow the
 wallet's history.
 

@@ -129,8 +129,9 @@ def evm_result(abandon: str) -> str:
     """Return the result of a node alone: ether at one address, a nonce at one.
 
     The first address holds DAI too, and the sixth USDT and DAI. The
-    legacy layout's third address, below account 0's key, holds wei and
-    USDT.
+    first legacy layout's third address, below account 0's key, holds wei
+    and USDT, and the second address of MyEtherWallet's, below m/44h/60h,
+    holds wei.
 
     :param abandon: the bundle.
     :returns: its text.
@@ -138,8 +139,9 @@ def evm_result(abandon: str) -> str:
     first = eth_address(abandon, "m/44h/60h/0h", 0)
     sixth = eth_address(abandon, "m/44h/60h/0h", 5)
     legacy = eth_address(abandon, "m/44h/60h/0h", 2, legacy=True)
+    mew = eth_address(abandon, "m/44h/60h", 1, legacy=True)
     fake = Ethereum(
-        {first: 10**18, legacy: 3},
+        {first: 10**18, legacy: 3, mew: 5},
         {sixth: 4},
         tokens={
             (DAI.contract, first): 2 * 10**18,
@@ -240,6 +242,7 @@ def test_the_report_of_a_scanned_bundle(abandon: str, result: str) -> None:
         f"  ethereum-classic, purpose 44: not checked: {NO_NODE}",
         f"  ethereum-classic, legacy account: not checked: {NO_NODE}",
         f"  bnb, purpose 44: not checked: {NO_NODE}",
+        f"  bnb, legacy account: not checked: {NO_NODE}",
         *other,
         (
             "total: bitcoin, 4000 sat confirmed, 2000 sat unconfirmed,"
@@ -578,6 +581,39 @@ def test_no_total_adds_two_chains(abandon: str, result: str, forked: str) -> Non
     ]
 
 
+def test_a_forks_address_two_xpub_texts_give_is_counted_once(abandon: str) -> None:
+    """A Bitcoin Cash account given Bitcoin's account 0 key at another depth.
+
+    The two xpubs differ as text and give the same P2PKH scripts, so both
+    accounts list the address paid before the fork: the total counts its
+    coins, at the fork and since, once, and the two accounts as one.
+    """
+    document = json.loads(abandon)
+    accounts = document["readings"][0]["accounts"]
+    (bitcoin,) = [a for a in accounts if a["path"] == "m/44h/0h/0h"]
+    (cash,) = [a for a in accounts if a["path"] == "m/44h/145h/1h"]
+    key = BIP32KeyData.b58decode(bitcoin["xpub"])
+    cash["xpub"] = BIP32KeyData(
+        key.version,
+        key.depth + 1,
+        key.parent_fingerprint,
+        key.index,
+        key.chain_code,
+        key.key,
+    ).b58encode()
+    text = json.dumps(document)
+    paid = HistoryTx(pay(1, (p2pkh("m/44h/0h/0h/0/0"), 10_000)), SHARED)
+    forked = forked_of(text, paid)
+    assert [
+        (u["path"], u["confirmed"], u["at_fork"]) for u in json.loads(forked)["used"]
+    ] == [("m/44h/0h/0h", 10_000, 10_000), ("m/44h/145h/1h", 10_000, 10_000)]
+    lines = report(text, None, [forked]).splitlines()
+    assert lines[-2] == (
+        "total: bitcoin-cash, 10000 sat confirmed, 0 sat unconfirmed,"
+        " 10000 sat at the fork, 1 used accounts, each account key once"
+    )
+
+
 def shared(text: str, path: str, other: str, *, descriptors: bool) -> str:
     """Return a bundle whose account at `other` holds the key at `path`.
 
@@ -650,12 +686,13 @@ def test_a_forks_total_counts_a_key_once() -> None:
 def test_the_report_of_an_ethereum_scan(abandon: str, evm_result: str) -> None:
     """The node, the tokens checked and not, each used address, the totals.
 
-    The legacy account shares account 0's key, and not its addresses: the
-    total counts both.
+    The first legacy account shares account 0's key, and not its
+    addresses: the total counts both, and the second legacy account.
     """
     first = eth_address(abandon, "m/44h/60h/0h", 0)
     sixth = eth_address(abandon, "m/44h/60h/0h", 5)
     legacy = eth_address(abandon, "m/44h/60h/0h", 2, legacy=True)
+    mew = eth_address(abandon, "m/44h/60h", 1, legacy=True)
     lines = report(abandon, evm_result).splitlines()
     checked = ", ".join(
         f"{token.symbol} {token.contract}" for token in EVM_CHAINS["ethereum"].tokens
@@ -673,7 +710,7 @@ def test_the_report_of_an_ethereum_scan(abandon: str, evm_result: str) -> None:
     assert checked.startswith(f"USDT {USDT.contract}, USDC 0x")
     (opening,) = [n for n, line in enumerate(lines) if line.startswith("reading")]
     classic = OTHER_CHAIN["ethereum-classic"]
-    assert lines[opening + 1 : opening + 20] == [
+    assert lines[opening + 1 : opening + 23] == [
         *(
             f"  bitcoin, purpose {purpose}: not checked: {NO_SERVER}"
             for purpose in (44, 49, 84, 86)
@@ -685,18 +722,21 @@ def test_the_report_of_an_ethereum_scan(abandon: str, evm_result: str) -> None:
         f"      receive m/44h/60h/0h/0/5 {sixth}: 0 wei, nonce 4, block 16",
         f"        USDT {USDT.contract}: 7, 6 decimals",
         f"        DAI {DAI.contract}: 1, 18 decimals",
-        "  ethereum, legacy account, on Ethereum: accounts 0 to 0 read, 1 used",
+        "  ethereum, legacy account, on Ethereum: accounts 0 to 1 read, 2 used",
         "    account 0, m/44h/60h/0h: 3 wei",
         f"      address m/44h/60h/0h/2 {legacy}: 3 wei, nonce 0, block 16",
         f"        USDT {USDT.contract}: 5, 6 decimals",
+        "    account 1, m/44h/60h: 5 wei",
+        f"      address m/44h/60h/1 {mew}: 5 wei, nonce 0, block 16",
         f"  ethereum-classic, purpose 44: not checked: {classic}",
         f"  ethereum-classic, legacy account: not checked: {classic}",
         f"  bnb, purpose 44: not checked: {OTHER_CHAIN['bnb']}",
+        f"  bnb, legacy account: not checked: {OTHER_CHAIN['bnb']}",
         f"  bitcoin-cash, purpose 44: not checked: {NOT_READ}",
     ]
     assert lines[-4:-1] == [
         (
-            f"total: ethereum, {10**18 + 3} wei of ETH, 2 used accounts, each"
+            f"total: ethereum, {10**18 + 8} wei of ETH, 3 used accounts, each"
             " account key once"
         ),
         f"total: ethereum, USDT {USDT.contract}: 12, 6 decimals, each account key once",
@@ -1020,11 +1060,12 @@ def test_every_line_naming_a_defined_word_has_a_shape(
         "\nused: reading 0, m/44h/60h/0h, legacy: 1 addresses, 3 wei of ETH, 5 of USDT",
         ", 7 of USDT at 6 decimals, ",
         "\nPolygon PoS: POL, nonces and tokens read: USDT, USDC, USDC.e, DAI, ",
-        "\n  ethereum, legacy account, on Ethereum: accounts 0 to 0 read, 1 used\n",
-        "\nreading 0, ethereum legacy: accounts read: 1\n",
+        "\n  ethereum, legacy account, on Ethereum: accounts 0 to 1 read, 2 used\n",
+        "\nreading 0, ethereum legacy: accounts read: 2\n",
         "\n  ethereum-classic, legacy account, on Ethereum Classic: accounts 0 to ",
         f"\n  bnb, purpose 44: not checked: {OTHER_CHAIN['bnb']}\n",
         "\n  bnb, purpose 44, on BNB Smart Chain: accounts 0 to ",
+        "\n  bnb, legacy account, on BNB Smart Chain: accounts 0 to 0 read, 0 used\n",
         "\nreading 0, bnb purpose 44: accounts read: ",
     ):
         assert line in written
@@ -1074,7 +1115,7 @@ def test_the_report_of_an_ethereum_classic_scan(abandon: str) -> None:
     assert read == [
         "  ethereum, purpose 44, on Ethereum Classic: accounts 0 to 3 read, 1 used",
         (
-            "  ethereum, legacy account, on Ethereum Classic: accounts 0 to 0 read,"
+            "  ethereum, legacy account, on Ethereum Classic: accounts 0 to 1 read,"
             " 0 used"
         ),
         (
@@ -1088,6 +1129,163 @@ def test_the_report_of_an_ethereum_classic_scan(abandon: str) -> None:
     ]
     assert lines[-2] == (
         "total: ethereum-classic, 9 wei of ETC, 3 used accounts, each account key once"
+    )
+
+
+def test_the_report_of_the_stable_account(abandon: str) -> None:
+    """On BNB Smart Chain, its one address is listed with its full path.
+
+    It holds USDT too, listed below it and totalled as an account's of a
+    purpose is.
+    """
+    stable = eth_address(abandon, "m/44h/60h/9172h/3604", 9999, legacy=True)
+    usdt = EVM_CHAINS["bnb-smart-chain"].tokens[0]
+    fake = Ethereum({stable: 6}, chain_id=56, tokens={(usdt.contract, stable): 2})
+    result = scan_module.scan(
+        abandon, None, node=node(fake), evm_chain="bnb-smart-chain"
+    )
+    lines = report(abandon, scan_module.dumps(result)).splitlines()
+    (opening,) = [n for n, line in enumerate(lines) if line.startswith("  bnb, legacy")]
+    assert lines[opening : opening + 4] == [
+        "  bnb, legacy account, on BNB Smart Chain: accounts 0 to 0 read, 1 used",
+        "    account 0, m/44h/60h/9172h/3604: 6 wei",
+        f"      address m/44h/60h/9172h/3604/9999 {stable}: 6 wei, nonce 0, block 16",
+        f"        USDT {usdt.contract}: 2, 18 decimals",
+    ]
+    assert lines[-3:-1] == [
+        "total: bnb-smart-chain, 6 wei of BNB, 1 used accounts, each account key once",
+        (
+            f"total: bnb-smart-chain, USDT {usdt.contract}: 2, 18 decimals, each"
+            " account key once"
+        ),
+    ]
+
+
+def test_an_address_alone_is_counted_apart_from_its_keys_children(
+    abandon: str,
+) -> None:
+    """The Stable Account's key edited to be MyEtherWallet's: two addresses.
+
+    One key, read below at index 0 for Ethereum's legacy layout and at
+    index 9999 alone for the Stable Account, gives two addresses whose
+    funds the total counts each once.
+    """
+    document = json.loads(abandon)
+    accounts = document["readings"][0]["accounts"]
+    (mew,) = [a for a in accounts if a["path"] == "m/44h/60h"]
+    (stable,) = [a for a in accounts if a["index"] is not None]
+    stable["xpub"] = mew["xpub"]
+    text = json.dumps(document)
+    low = eth_address(text, "m/44h/60h", 0, legacy=True)
+    high = eth_address(text, "m/44h/60h", 9999, legacy=True)
+    fake = Ethereum({low: 2, high: 3}, chain_id=56)
+    result = scan_module.scan(text, None, node=node(fake), evm_chain="bnb-smart-chain")
+    lines = report(text, scan_module.dumps(result)).splitlines()
+    assert lines[-2] == (
+        "total: bnb-smart-chain, 5 wei of BNB, 2 used accounts, each account key once"
+    )
+
+
+def test_an_address_two_keys_list_is_counted_once(abandon: str) -> None:
+    """The Stable Account edited to MyEtherWallet's key at index 0.
+
+    Two accounts of two keys, "legacy" and "index 0", each list the one
+    address that holds wei: the total counts its balance once.
+    """
+    document = json.loads(abandon)
+    accounts = document["readings"][0]["accounts"]
+    (mew,) = [a for a in accounts if a["path"] == "m/44h/60h"]
+    (stable,) = [a for a in accounts if a["index"] is not None]
+    stable.update(xpub=mew["xpub"], index=0)
+    text = json.dumps(document)
+    first = eth_address(text, "m/44h/60h", 0, legacy=True)
+    fake = Ethereum({first: 7}, chain_id=56)
+    result = scan_module.scan(text, None, node=node(fake), evm_chain="bnb-smart-chain")
+    assert result.evm is not None
+    assert [(u.path, u.balance) for u in result.evm.used] == [
+        ("m/44h/60h", "7"),
+        ("m/44h/60h/9172h/3604", "7"),
+    ]
+    lines = report(text, scan_module.dumps(result)).splitlines()
+    assert lines[-2] == (
+        "total: bnb-smart-chain, 7 wei of BNB, 2 used accounts, each account key once"
+    )
+
+
+def test_an_address_of_overlapping_layouts_is_counted_once(abandon: str) -> None:
+    """The legacy layout's key edited to account 0's receive branch.
+
+    Its children are then account 0's receive addresses: two accounts of
+    two keys list the one address, which holds 7 wei and 13 USDT units,
+    and the totals count both once (issue #78).
+    """
+    document = json.loads(abandon)
+    accounts = document["readings"][0]["accounts"]
+    (zero,) = [
+        a
+        for a in accounts
+        if (a["coin"], a["purpose"], a["path"]) == ("ethereum", 44, "m/44h/60h/0h")
+    ]
+    (legacy,) = [
+        a
+        for a in accounts
+        if (a["coin"], a["purpose"], a["path"]) == ("ethereum", None, "m/44h/60h/0h")
+    ]
+    receive = BIP32KeyData.b58decode(zero["xpub"]).derive(0)
+    legacy.update(xpub=receive.b58encode(), path="m/44h/60h/0h/0")
+    text = json.dumps(document)
+    first = eth_address(text, "m/44h/60h/0h", 0)
+    assert first == eth_address(text, "m/44h/60h/0h/0", 0, legacy=True)
+    fake = Ethereum({first: 7}, tokens={(USDT.contract, first): 13})
+    result = scan_module.scan(text, None, node=node(fake))
+    assert result.evm is not None
+    assert [(u.path, u.balance) for u in result.evm.used] == [
+        ("m/44h/60h/0h", "7"),
+        ("m/44h/60h/0h/0", "7"),
+    ]
+    lines = report(text, scan_module.dumps(result)).splitlines()
+    assert lines[-3:-1] == [
+        "total: ethereum, 7 wei of ETH, 2 used accounts, each account key once",
+        f"total: ethereum, USDT {USDT.contract}: 13, 6 decimals, each account key once",
+    ]
+
+
+def test_a_bitcoin_address_two_keys_list_is_counted_once(abandon: str) -> None:
+    """Account 1's key edited to account 0's, at another depth.
+
+    The two xpubs differ as text and give the same scripts, so both
+    accounts list the address paid: the total counts its balance once.
+    """
+    document = json.loads(abandon)
+    accounts = document["readings"][0]["accounts"]
+    (zero,) = [a for a in accounts if a["path"] == "m/84h/0h/0h"]
+    (one,) = [a for a in accounts if a["path"] == "m/84h/0h/1h"]
+    key = BIP32KeyData.b58decode(zero["xpub"])
+    deeper = BIP32KeyData(
+        key.version,
+        key.depth + 1,
+        key.parent_fingerprint,
+        key.index,
+        key.chain_code,
+        key.key,
+    ).b58encode()
+    one["descriptors"] = [
+        add_checksum(d.split("#")[0].replace(zero["xpub"], deeper))
+        for d in zero["descriptors"]
+    ]
+    one["xpub"] = deeper
+    text = json.dumps(document)
+    paid = script(text, "m/84h/0h/0h", 0, 0)
+    chain = Chain(HistoryTx(pay(1, (paid, 9)), BLOCK))
+    result = scan_module.scan(text, chain, server="s:1")
+    assert [(u.path, u.confirmed) for u in result.used] == [
+        ("m/84h/0h/0h", 9),
+        ("m/84h/0h/1h", 9),
+    ]
+    lines = report(text, scan_module.dumps(result)).splitlines()
+    assert lines[-2] == (
+        "total: bitcoin, 9 sat confirmed, 0 sat unconfirmed, 2 used accounts,"
+        " each account key once"
     )
 
 
