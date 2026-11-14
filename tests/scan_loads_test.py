@@ -123,7 +123,7 @@ def test_a_result_of_both_reads_back(bundle: str) -> None:
     text = scan_dumps(scan(bundle, chain, server="s:1", node=node(fake)))
     read = loads(text, bundle)
     assert scan_dumps(read) == text
-    assert {n.reason for n in read.not_checked} == {NOT_READ, OTHER_CHAIN}
+    assert {n.reason for n in read.not_checked} == {NOT_READ, *OTHER_CHAIN.values()}
 
 
 def test_an_ethereum_classic_result_reads_back(bundle: str) -> None:
@@ -149,6 +149,52 @@ def test_an_ethereum_classic_result_reads_back(bundle: str) -> None:
     document = json.loads(text)
     document["evm"]["chain"] = 61
     with pytest.raises(SeedScanTypeError, match="member 'chain' of type int"):
+        loads(json.dumps(document), bundle)
+
+
+def test_a_bnb_smart_chain_result_reads_back(bundle: str) -> None:
+    """A BNB account used on BNB Smart Chain, and refused on another chain."""
+    address = eth_address(bundle, "m/44h/714h/1h", 2)
+    fake = Ethereum({address: 3}, chain_id=56)
+    text = scan_dumps(scan(bundle, None, node=node(fake), evm_chain="bnb-smart-chain"))
+    read = loads(text, bundle)
+    assert scan_dumps(read) == text
+    assert read.evm is not None
+    assert [(u.coin, u.path, u.balance) for u in read.evm.used] == [
+        ("bnb", "m/44h/714h/1h", "3")
+    ]
+    document = json.loads(text)
+    document["evm"]["chain"], document["evm"]["chain_id"] = "base", 8453
+    document["evm"]["tokens"] = [
+        dataclasses.asdict(token) for token in EVM_CHAINS["base"].tokens
+    ]
+    with pytest.raises(SeedScanValueError, match="a coin the chain does not read"):
+        loads(json.dumps(document), bundle)
+
+
+def test_a_legacy_layout_result_reads_back(bundle: str) -> None:
+    """Each coin's legacy account, its addresses below its key itself.
+
+    Ethereum's shares the key of its account 0, whose receive branch
+    gives other addresses: one of them listed for the legacy account is
+    refused.
+    """
+    ethereum = eth_address(bundle, "m/44h/60h/0h", 3, legacy=True)
+    classic = eth_address(bundle, "m/44h/60h/160720h/0h", 0, legacy=True)
+    fake = Ethereum({ethereum: 1, classic: 2}, chain_id=61)
+    text = scan_dumps(scan(bundle, None, node=node(fake), evm_chain="ethereum-classic"))
+    read = loads(text, bundle)
+    assert scan_dumps(read) == text
+    assert read.evm is not None
+    assert [(u.coin, u.purpose, u.path) for u in read.evm.used] == [
+        ("ethereum", None, "m/44h/60h/0h"),
+        ("ethereum-classic", None, "m/44h/60h/160720h/0h"),
+    ]
+    document = json.loads(text)
+    document["evm"]["used"][0]["addresses"][0]["address"] = eth_address(
+        bundle, "m/44h/60h/0h", 3
+    )
+    with pytest.raises(SeedScanValueError, match="not the bundle's at its position"):
         loads(json.dumps(document), bundle)
 
 
@@ -788,16 +834,18 @@ def test_the_reason_a_coin_is_not_checked_is_the_one_scan_gives(
 ) -> None:
     """A coin whose backend was not named says so; every other, `NOT_READ`."""
     reasons = {(n.coin, n.reason) for n in loads(result, bundle).not_checked}
-    evm_coins = {"ethereum", "ethereum-classic"}
+    evm_coins = {"ethereum", "ethereum-classic", "bnb"}
     assert {(c, r) for c, r in reasons if c in evm_coins} == {
         ("ethereum", NO_NODE),
         ("ethereum-classic", NO_NODE),
+        ("bnb", NO_NODE),
     }
     assert {r for c, r in reasons if c not in evm_coins} == {NOT_READ}
     assert "bitcoin" not in {c for c, _ in reasons}
     reasons = {(n.coin, n.reason) for n in loads(evm_result, bundle).not_checked}
     assert ("bitcoin", NO_SERVER) in reasons
-    assert ("ethereum-classic", OTHER_CHAIN) in reasons
+    assert ("ethereum-classic", OTHER_CHAIN["ethereum-classic"]) in reasons
+    assert ("bnb", OTHER_CHAIN["bnb"]) in reasons
     assert "ethereum" not in {c for c, _ in reasons}
 
 
