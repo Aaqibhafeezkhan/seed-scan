@@ -157,8 +157,10 @@ REASONS = {
         "not a Bitcoin address: neither searched nor written, in case it is a key"
     ),
 }
+# the digits a passphrase's number in a reason has at most
+_PASSPHRASE_DIGITS = 9
 _SLIP39_PASSPHRASE = re.compile(
-    r"passphrase (?:0|[1-9][0-9]{0,8}): not one SLIP-0039 accepts"
+    rf"passphrase (?:0|[1-9][0-9]{{0,{_PASSPHRASE_DIGITS - 1}}}): not one SLIP-0039 accepts"
 )
 
 # a path as identify writes it: `m`, then indexes, hardened ones with `h`
@@ -193,9 +195,18 @@ _GENERATOR = (0xF5DEE51989, 0xA9FDCA3312, 0x1BAB10E32D, 0x3706B1677A, 0x644D626F
 def slip39_passphrase(number: int) -> str:
     """Return the reason a passphrase SLIP-0039 refuses is not checked.
 
+    A number that is no `int`, `bool` included, is a `SeedScanTypeError`,
+    and one whose reason `loads` would refuse is a `SeedScanValueError`.
+
     :param number: the passphrase's number, never the passphrase.
     :returns: the reason.
     """
+    if isinstance(number, bool) or not isinstance(number, int):
+        raise SeedScanTypeError(f"invalid number type: {type(number).__name__}")
+    # compared before `str` converts it, which refuses an int of too many
+    # digits with a ValueError of its own
+    if not 0 <= number < 10**_PASSPHRASE_DIGITS:
+        raise SeedScanValueError("passphrase number: outside what the format writes")
     return f"passphrase {number}: not one SLIP-0039 accepts"
 
 
@@ -265,7 +276,12 @@ class Bundle:
 
 
 def dumps(bundle: Bundle) -> str:
-    """Return the JSON text of a bundle, members in a fixed order."""
+    """Return the JSON text of a bundle, members in a fixed order.
+
+    Anything but a `Bundle` is a `SeedScanTypeError`.
+    """
+    if not isinstance(bundle, Bundle):
+        raise SeedScanTypeError(f"invalid bundle type: {type(bundle).__name__}")
     document = {"format": FORMAT, "version": VERSION, **asdict(bundle)}
     return json.dumps(document, indent=2) + "\n"
 
