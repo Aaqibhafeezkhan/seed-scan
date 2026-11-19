@@ -52,6 +52,7 @@ from seed_scan.scan import (
     NotRead,
     Searched,
     Tip,
+    _too_deep,
     parse_server,
     scan,
 )
@@ -1020,6 +1021,9 @@ def test_an_ethereum_xpub_that_does_not_decode_is_refused(abandon: str) -> None:
 def deepened(text: str, path: str, purpose: int | None, depth: int) -> str:
     """Return a bundle with one account's extended public key at a depth.
 
+    A Bitcoin account's descriptors are written over the new key, their
+    checksums included.
+
     :param text: the bundle's text.
     :param path: the account's path.
     :param purpose: its purpose, since a legacy layout can share the path
@@ -1034,7 +1038,8 @@ def deepened(text: str, path: str, purpose: int | None, depth: int) -> str:
         for a in r["accounts"]
         if a["path"] == path and a["purpose"] == purpose
     ]
-    data = BIP32KeyData.b58decode(account["xpub"], check_validity=False)
+    old = account["xpub"]
+    data = BIP32KeyData.b58decode(old, check_validity=False)
     account["xpub"] = BIP32KeyData(
         data.version,
         depth,
@@ -1044,7 +1049,100 @@ def deepened(text: str, path: str, purpose: int | None, depth: int) -> str:
         data.key,
         check_validity=False,
     ).b58encode(check_validity=False)
+    account["descriptors"] = [
+        add_checksum(d.split("#")[0].replace(old, account["xpub"]))
+        for d in account["descriptors"]
+    ]
     return json.dumps(document)
+
+
+@pytest.mark.parametrize(
+    "path, purpose, depth, number",
+    [
+        ("m/84h/0h/0h", 84, 255, 10),
+        ("m/84h/0h/0h", 84, 254, 10),
+        ("m/44h/0h/0h", 44, 255, 0),
+        ("m/44h/0h/0h", 44, 254, 0),
+    ],
+)
+def test_a_bitcoin_xpub_too_deep_to_derive_is_refused(
+    abandon: str, path: str, purpose: int, depth: int, number: int
+) -> None:
+    """A key too deep to derive the addresses read below it is refused.
+
+    A Bitcoin account's addresses are two levels below its key
+    (``<branch>/<index>``). `scan` refuses before the reader is asked.
+    `scan.loads` and `report` refuse the bundle before they read the
+    result, so ``{}`` stands for one.
+
+    :param abandon: the bundle.
+    :param path: the account's path.
+    :param purpose: its purpose.
+    :param depth: the depth its key says it is at.
+    :param number: where the account is in the bundle.
+    """
+    text = deepened(abandon, path, purpose, depth)
+    loads(text)
+    with pytest.raises(SeedScanValueError) as caught:
+        scan(text, NEVER, server="s:1")
+    message = f"bundle: reading 0, account {number}: an xpub too deep to derive"
+    assert str(caught.value) == message
+    assert caught.value.__context__ is None
+    for call in (lambda: scan_module.loads("{}", text), lambda: report(text, "{}")):
+        with pytest.raises(SeedScanValueError) as caught:
+            call()
+        assert str(caught.value) == message
+        assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("path, purpose", [("m/84h/0h/0h", 84), ("m/44h/0h/0h", 44)])
+def test_the_deepest_bitcoin_xpub_that_derives_is_read(
+    abandon: str, path: str, purpose: int
+) -> None:
+    """One level above the refusal: an address at depth 255 is read.
+
+    `scan` finds it, `scan.loads` reads the result back, and `report`
+    lists it.
+
+    :param abandon: the bundle.
+    :param path: the account's path.
+    :param purpose: its purpose.
+    """
+    text = deepened(abandon, path, purpose, 253)
+    paid = script(text, path, 1, 0)
+    chain = Chain(HistoryTx(pay(1, (paid, 7_000)), BLOCK))
+    result = scan(text, chain, server="s:1")
+    (used,) = result.used
+    assert (used.path, used.purpose) == (path, purpose)
+    assert [a.address for a in used.addresses] == [paid.address]
+    written = scan_module.dumps(result)
+    assert scan_module.loads(written, text) == result
+    assert paid.address in report(text, written)
+
+
+def test_a_musig_reaches_as_far_as_its_deepest_participant() -> None:
+    """`tr(musig(...))` is as deep as its deepest key; a fixed one is not.
+
+    These two branches of `_reach` are read here rather than through a
+    bundle: an account's descriptors are over its own xpub, so a `musig()`
+    and a key fixed in the text never reach `seed_scan.scan._too_deep`
+    from a scan.
+    """
+    master = xpub_from_xprv(XPRV)
+    data = BIP32KeyData.b58decode(master)
+    deep = BIP32KeyData(
+        data.version,
+        254,
+        data.parent_fingerprint,
+        data.index,
+        data.chain_code,
+        data.key,
+    ).b58encode(check_validity=False)
+    # 254 below, then the branch and the index: 256.
+    assert _too_deep(parse(f"tr(musig({master}/0/*,{deep}/0/*))"))
+    # secp256k1's generator, fixed in the descriptor: no path to derive.
+    generator = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    assert not _too_deep(parse(f"pkh({generator})"))
 
 
 #: Trust Wallet's Stable Account on BNB Smart Chain, an address alone.

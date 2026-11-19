@@ -168,6 +168,8 @@ from seed_scan.exceptions import SeedScanTypeError, SeedScanValueError
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+    from bip32_descriptors.descriptors import KeyExpression
+
 __all__ = [
     "ACCOUNT_GAP",
     "FORMAT",
@@ -408,6 +410,42 @@ def dumps(result: ScanResult) -> str:
     return json.dumps(document, indent=2) + "\n"
 
 
+#: BIP32's last depth: a key's depth is one byte.
+_DEPTH_LIMIT = 255
+
+
+def _reach(expression: KeyExpression) -> int:
+    """Return the depth the addresses read below a key expression reach.
+
+    A descriptor spells the branch an address is read at, and its ``*``
+    stands for the index, so the deepest one is the key's own depth plus
+    the path it derives, the wildcard included; a `musig()` aggregates
+    its participants, and reaches as far as the deepest of them.
+    """
+    if expression.participants:
+        return max(_reach(participant) for participant in expression.participants)
+    if not expression.xkey:
+        return 0
+    key = BIP32KeyData.b58decode(expression.xkey, check_validity=False)
+    steps = len(expression.der_path) + (1 if expression.wildcard is not None else 0)
+    return key.depth + steps
+
+
+def _too_deep(descriptor: Descriptor) -> bool:
+    """Whether the addresses read below a descriptor's keys are out of reach.
+
+    `parse` has checked the keys; what it does not check is that the
+    path below one stays within `_DEPTH_LIMIT`, and a derivation past it
+    raises `BTClibValueError`. `_descriptors` refuses such a descriptor,
+    as `_key` refuses a key that does not decode, so that the public
+    surface raises its own error, not the dependency's, before a reader
+    or a node is asked.
+    """
+    return any(
+        _reach(expression) > _DEPTH_LIMIT for expression in descriptor.key_expressions
+    )
+
+
 def _descriptors(account: Account, where: str) -> tuple[Descriptor, ...]:
     """Return an account's descriptors, parsed.
 
@@ -417,7 +455,8 @@ def _descriptors(account: Account, where: str) -> tuple[Descriptor, ...]:
     the key is a point of the curve, and `parse` does. Its refusal may quote
     the descriptor, so it is not kept: the refusal says where the account is
     in the bundle, raised outside `suppress` so that the error is not its
-    context.
+    context. A key too deep to derive the addresses read below it is
+    refused as `_too_deep` finds one.
     """
     descriptors: tuple[Descriptor, ...] = ()
     with contextlib.suppress(TypeError, ValueError):
@@ -425,6 +464,8 @@ def _descriptors(account: Account, where: str) -> tuple[Descriptor, ...]:
     if not descriptors:
         err_msg = f"bundle: {where}: a descriptor that does not parse"
         raise SeedScanValueError(err_msg)
+    if any(_too_deep(descriptor) for descriptor in descriptors):
+        raise SeedScanValueError(f"bundle: {where}: an xpub too deep to derive")
     return descriptors
 
 
@@ -462,10 +503,9 @@ def _source(account: Account, where: str) -> _Source:
     if not account.keys:
         key = _key(account, where)
         # The addresses read are one level below a key of no purpose, and
-        # two below an account's: BIP32 stops at depth 255. Refuse here,
-        # as `_key` refuses one that does not decode, so that the public
-        # surface raises its own error, not the dependency's.
-        if key.depth + (1 if account.purpose is None else 2) > 255:
+        # two below an account's: refused past `_DEPTH_LIMIT`, for the
+        # reason `_too_deep` gives.
+        if key.depth + (1 if account.purpose is None else 2) > _DEPTH_LIMIT:
             raise SeedScanValueError(f"bundle: {where}: an xpub too deep to derive")
         return key if account.purpose is None else key.derive(0)
     addresses: tuple[str, ...] = ()
@@ -914,12 +954,12 @@ def scan(
     Refused, as `seed_scan.bundle.loads` refuses it: text that is not a
     bundle. Refused as a `SeedScanValueError` too: a descriptor that
     does not parse, as one whose key is no point of the curve, an
-    extended public key that does not decode, or an EVM account's that
-    is too deep to derive the addresses read below it, a key of a layout
-    held key by key that is no point of the curve, accounts not numbered
-    from 0, and a `server` that `parse_server` refuses. A bound below 1
-    is refused, and one that is no integer is a `SeedScanTypeError`, as
-    is a `server` that is no string beside a `reader`. Refused once
+    extended public key that does not decode or is too deep to derive
+    the addresses read below it, a key of a layout held key by key that
+    is no point of the curve, accounts not numbered from 0, and a
+    `server` that `parse_server` refuses. A bound below 1 is refused,
+    and one that is no integer is a `SeedScanTypeError`, as is a
+    `server` that is no string beside a `reader`. Refused once
     `reader` is asked: an account whose history lists two transactions
     spending one output, or whose used positions a read under
     `gap_limit` does not reach, in two reads; and an account whose
@@ -1613,8 +1653,8 @@ def loads(text: str, bundle: str) -> ScanResult:
     """
     read = bundle_loads(bundle)
     # refused as `scan` refuses it: a descriptor or a key that does not
-    # parse, an EVM key too deep to derive, or accounts not numbered
-    # from 0 with no gap
+    # parse, a key too deep to derive, or accounts not numbered from 0
+    # with no gap
     for n, reading in enumerate(read.readings):
         _plan(n, reading)
     document = _document(text)
