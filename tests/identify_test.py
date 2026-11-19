@@ -714,7 +714,7 @@ def test_a_mnemonic_that_is_no_str_is_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    ("passphrases", "message"),
+    "passphrases, message",
     [
         (None, "invalid passphrases type: NoneType"),
         ("ab", "invalid passphrases type: str"),
@@ -722,9 +722,7 @@ def test_a_mnemonic_that_is_no_str_is_refused() -> None:
         (("", None), "invalid passphrases: expected strings"),
     ],
 )
-def test_invalid_passphrases_are_refused(
-    passphrases: Any, message: str
-) -> None:
+def test_invalid_passphrases_are_refused(passphrases: Any, message: str) -> None:
     """Passphrases are a list or tuple of str, refused without a secret."""
     with pytest.raises(SeedScanTypeError, match=message) as e:
         identify(ABANDON, passphrases, no_share)
@@ -747,7 +745,5 @@ def test_a_non_callable_prompt_is_refused() -> None:
 @pytest.mark.parametrize("address", [1.5, b"x"])
 def test_a_non_string_address_is_refused(address: Any) -> None:
     """An address is text or None, not a value another package must refuse."""
-    with pytest.raises(
-        SeedScanTypeError, match="invalid address type"
-    ):
+    with pytest.raises(SeedScanTypeError, match="invalid address type"):
         identify(ABANDON, [""], no_share, address=address)
