@@ -399,10 +399,6 @@ _NOT_REFUSED = {
     ("seed_scan.forks.forks", "reader", "type"),
     ("seed_scan.scan.scan", "reader", "type"),
     ("seed_scan.scan.scan", "node", "type"),
-    # btclib-org/seed-scan#63
-    ("seed_scan.identify.identify", "address", "type"),
-    ("seed_scan.identify.identify", "passphrases", "type"),
-    ("seed_scan.identify.identify", "prompt", "type"),
 }
 
 # a wrong value a function answers, by dotted name and parameter, as its

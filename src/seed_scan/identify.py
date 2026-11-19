@@ -590,7 +590,7 @@ def _search(found: _Found, address: str, accounts: int, indexes: int) -> Search:
 
 def identify(
     mnemonic: str,
-    passphrases: Sequence[str],
+    passphrases: list[str] | tuple[str, ...],
     prompt: Callable[[str], str],
     *,
     accounts: int = 5,
@@ -619,6 +619,16 @@ def identify(
     """
     if not isinstance(mnemonic, str):
         raise SeedScanTypeError(f"invalid mnemonic type: {type(mnemonic).__name__}")
+    if not isinstance(passphrases, (list, tuple)):
+        raise SeedScanTypeError(
+            f"invalid passphrases type: {type(passphrases).__name__}"
+        )
+    if any(not isinstance(passphrase, str) for passphrase in passphrases):
+        raise SeedScanTypeError("invalid passphrases: expected strings")
+    if not callable(prompt):
+        raise SeedScanTypeError(f"invalid prompt type: {type(prompt).__name__}")
+    if address is not None and not isinstance(address, str):
+        raise SeedScanTypeError(f"invalid address type: {type(address).__name__}")
     _assert_bound(accounts, "accounts")
     _assert_bound(indexes, "indexes")
     _assert_bound(keys, "keys")
