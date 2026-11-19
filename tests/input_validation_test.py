@@ -111,6 +111,7 @@ _WRONG_TYPE: dict[str, tuple[Any, ...]] = {
     # every value is an object
     "object": (),
     "Sequence[str]": (None, 1.5, "text", [None]),
+    "list[str] | tuple[str, ...]": (None, 1.5, "text", [None]),
     "Callable[[str], str]": (None, 1.5),
     "Callable[[Request, float], tuple[int, bytes]]": (None, 1.5),
     "HistoryReader": (None, 1.5),
@@ -138,6 +139,7 @@ _WRONG_VALUE: dict[str, tuple[Any, ...]] = {
     "object": ("zz", "0x01"),
     # every list of passphrases is one to try, and every prompt one to ask
     "Sequence[str]": (),
+    "list[str] | tuple[str, ...]": (),
     "Callable[[str], str]": (),
     # a transport, a reader and a node are asked, and what they answer is
     # checked as it is read
@@ -399,10 +401,6 @@ _NOT_REFUSED = {
     ("seed_scan.forks.forks", "reader", "type"),
     ("seed_scan.scan.scan", "reader", "type"),
     ("seed_scan.scan.scan", "node", "type"),
-    # btclib-org/seed-scan#63
-    ("seed_scan.identify.identify", "address", "type"),
-    ("seed_scan.identify.identify", "passphrases", "type"),
-    ("seed_scan.identify.identify", "prompt", "type"),
 }
 
 # a wrong value a function answers, by dotted name and parameter, as its
