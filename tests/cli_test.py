@@ -472,6 +472,10 @@ def test_another_hook_keeping_the_guard_out_stops_the_command(other: str) -> Non
         [sys.executable, "-c", probe],
         capture_output=True,
         encoding="utf-8",
+        # a child that hangs fails this test, rather than holding the
+        # run until the job's timeout-minutes; the bound is the one
+        # tests/conftest_test.py gives its own child
+        timeout=120,
         check=False,
     )
     assert done.returncode == 1
@@ -506,6 +510,10 @@ def test_an_interrupt_that_is_also_a_refusal_says_interrupted() -> None:
         [sys.executable, "-c", probe],
         capture_output=True,
         encoding="utf-8",
+        # a child that hangs fails this test, rather than holding the
+        # run until the job's timeout-minutes; the bound is the one
+        # tests/conftest_test.py gives its own child
+        timeout=120,
         check=False,
     )
     assert done.returncode == 1
@@ -570,6 +578,10 @@ def test_a_socket_is_refused_once_the_guard_is_on() -> None:
         [sys.executable, "-c", probe],
         capture_output=True,
         encoding="utf-8",
+        # a child that hangs fails this test, rather than holding the
+        # run until the job's timeout-minutes; the bound is the one
+        # tests/conftest_test.py gives its own child
+        timeout=120,
         check=False,
     )
     assert done.returncode != 0
@@ -586,6 +598,10 @@ def test_a_process_is_refused_once_the_guard_is_on() -> None:
         [sys.executable, "-c", probe],
         capture_output=True,
         encoding="utf-8",
+        # a child that hangs fails this test, rather than holding the
+        # run until the job's timeout-minutes; the bound is the one
+        # tests/conftest_test.py gives its own child
+        timeout=120,
         check=False,
     )
     assert done.returncode != 0

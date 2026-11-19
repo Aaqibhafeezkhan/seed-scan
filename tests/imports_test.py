@@ -102,6 +102,10 @@ def _loaded_after_importing(module_name: str) -> list[str]:
         check=True,
         capture_output=True,
         encoding="utf-8",
+        # a child that hangs fails this test, rather than holding the
+        # run until the job's timeout-minutes; the bound is the one
+        # tests/conftest_test.py gives its own child
+        timeout=120,
         cwd=_ROOT,
     ).stdout
     return cast("list[str]", ast.literal_eval(stdout))
@@ -155,6 +159,10 @@ def _installed_after_importing(module_name: str) -> set[str]:
         check=True,
         capture_output=True,
         encoding="utf-8",
+        # a child that hangs fails this test, rather than holding the
+        # run until the job's timeout-minutes; the bound is the one
+        # tests/conftest_test.py gives its own child
+        timeout=120,
         cwd=_ROOT,
     ).stdout
     return set(cast("list[str]", ast.literal_eval(stdout)))
